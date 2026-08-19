@@ -6,8 +6,8 @@ import json
 
 # Local modules
 from backend.model import model 
-from backend.database import log_prediction 
-from backend.config import WEIGHTS_PATH # Use the defined path for consistency
+from backend.database import log_prediction, init_db 
+from backend.config import WEIGHTS_PATH, MAX_SEQ_LEN, PADDING_ID # Use the defined path for consistency
 
 # --- Initialization: Load Model and App ---
 # Initialize FastAPI app instance
@@ -15,8 +15,13 @@ app = FastAPI(title="GRU Purchase Intent Predictor API")
 
 @app.on_event("startup")
 def load_model():
-    """Loads PyTorch model weights into memory when the application starts."""
+    """Loads PyTorch model weights into memory and initializes DB when the application starts."""
     global model
+    try:
+        init_db()
+        print("Database initialized successfully.")
+    except Exception as e:
+        print(f"WARNING: Database initialization failed: {e}")
     print(f"Attempting to load model from: {WEIGHTS_PATH}")
     try:
         # Note: In a real environment, WEIGHTS_PATH needs absolute path handling. 
@@ -51,13 +56,14 @@ async def predict(request: SessionRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail="Invalid session ID format.")
 
-    seq_len = torch.min(len(session_ids), model.trained_params['MAX_SEQ_LEN'])
+    seq_len = min(len(session_ids), MAX_SEQ_LEN)
     padded_tensor = torch.nn.functional.pad(
         input_tensor[:seq_len], 
-        (0, model.trained_params['MAX_SEQ_LEN'] - len(session_ids), 0, 0), 
+        (0, MAX_SEQ_LEN - seq_len), 
         "constant", 
-        padding_value =model.trained_params['PADDING_ID'] # Use padding ID at the end
+        value=PADDING_ID # Use padding ID at the end
     )
+    padded_tensor = padded_tensor.unsqueeze(0)
 
     # --- 2. Model Inference ---
     with torch.no_grad():

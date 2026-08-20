@@ -1,0 +1,9 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0.post1
+pydantic==2.4.2
+scikit-learn==1.3.2
+psycopg2-binary==2.9.9
+
+# Explicitly pull the CPU version of PyTorch to save space and reduce cloud costs
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.0+cpu

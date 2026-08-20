@@ -7,10 +7,10 @@ import json
 # Local modules
 from backend.model import model 
 from backend.database import log_prediction 
-from backend.config import WEIGHTS_PATH # Use the defined path for consistency
+from backend.config import WEIGHTS_PATH 
 
 # --- Initialization: Load Model and App ---
-# Initialize FastAPI app instance
+# THIS IS THE LINE THAT WAS MISSING:
 app = FastAPI(title="GRU Purchase Intent Predictor API")
 
 @app.on_event("startup")
@@ -19,20 +19,15 @@ def load_model():
     global model
     print(f"Attempting to load model from: {WEIGHTS_PATH}")
     try:
-        # Note: In a real environment, WEIGHTS_PATH needs absolute path handling. 
-        # Using a direct reference based on the plan's assumption.
         model.load_state_dict(torch.load(WEIGHTS_PATH))
         print("Model loaded successfully.")
     except FileNotFoundError:
         print(f"ERROR: Model weights not found at {WEIGHTS_PATH}. The API will run but predictions will fail.")
-        # In case of missing model, set a dummy state to prevent immediate crash.
         pass 
     except Exception as e:
         print(f"CRITICAL ERROR loading model: {e}")
 
-
 # --- Data Schemas ---
-
 class SessionRequest(BaseModel):
     """Input schema for the /predict endpoint."""
     session_ids: list[int] = Field(..., description="Sequence of product IDs (clickstream)")
@@ -45,23 +40,37 @@ async def predict(request: SessionRequest):
     """
     session_ids = request.session_ids
 
+    # --- Configuration Variables ---
+    MAX_SEQ_LEN = 20  
+    PADDING_ID = 0    
+
     # --- 1. Preprocessing Logic (Padding/Truncation) ---
     try:
         input_tensor = torch.LongTensor(session_ids)
     except Exception as e:
         raise HTTPException(status_code=400, detail="Invalid session ID format.")
 
-    seq_len = torch.min(len(session_ids), model.trained_params['MAX_SEQ_LEN'])
-    padded_tensor = torch.nn.functional.pad(
-        input_tensor[:seq_len], 
-        (0, model.trained_params['MAX_SEQ_LEN'] - len(session_ids), 0, 0), 
-        "constant", 
-        padding_value =model.trained_params['PADDING_ID'] # Use padding ID at the end
-    )
+    current_len = len(session_ids)
+    seq_len = min(current_len, MAX_SEQ_LEN)
+    
+    truncated_tensor = input_tensor[:seq_len]
+
+    pad_amount = MAX_SEQ_LEN - seq_len
+    if pad_amount > 0:
+        padded_tensor = torch.nn.functional.pad(
+            truncated_tensor, 
+            (0, pad_amount), 
+            "constant", 
+            value=PADDING_ID 
+        )
+    else:
+        padded_tensor = truncated_tensor
+
+    batched_tensor = padded_tensor.unsqueeze(0)
 
     # --- 2. Model Inference ---
     with torch.no_grad():
-        prediction = model(padded_tensor)
+        prediction = model(batched_tensor)
         prob = prediction.item()
     
     # --- 3. Postprocessing & Output Generation ---
@@ -72,14 +81,11 @@ async def predict(request: SessionRequest):
         "prediction": pred_str
     }
 
-
     # --- 4. Logging (Must happen AFTER successful prediction) ---
     try:
         log_prediction(session_ids, prob, pred_str)
     except Exception as e:
-        # Log failure but don't fail the API call if logging fails
         print(f"WARNING: Failed to log result after prediction. Error: {e}")
-
 
     return result
 
